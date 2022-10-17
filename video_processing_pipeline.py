@@ -35,7 +35,7 @@ class FrameData(Base):
     __tablename__ = "video_frames"
     video_name = Column(String, primary_key=True)
     frame_number = Column(Integer, primary_key=True)
-    frame_timestamp = Column(Numeric, primary_key=True)
+    frame_timestamp = Column(Numeric)
     frame_string = Column(String)
 
 
