@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import time
 import argparse
 from multiprocessing import Pool as ProcessPool, cpu_count
 from sqlalchemy.orm import declarative_base
@@ -29,10 +27,6 @@ VIDEO_FILES_EXTENSION = '.mp4'
 TARGET_WIDTH = 30
 TARGET_HEIGHT = 30
 
-logging.basicConfig(format="[%(thread)-5d]%(asctime)s: %(message)s")
-logger = logging.getLogger('async')
-logger.setLevel(logging.INFO)
-
 
 Base = declarative_base()
 
@@ -41,7 +35,7 @@ class FrameData(Base):
     __tablename__ = "video_frames"
     video_name = Column(String, primary_key=True)
     frame_number = Column(Integer, primary_key=True)
-    frame_timestamp = Column(Numeric, primary_key=True)
+    frame_timestamp = Column(Numeric)
     frame_string = Column(String)
 
 
@@ -57,6 +51,7 @@ class ToDataBaseBatchSender(list):
             self.batch_load_to_db()
 
     def batch_load_to_db(self):
+        logger = logging.getLogger("log")
         logger.debug("Start loading batch to database")
         with Session(self.engine) as session:
             session.add_all(self)
@@ -65,14 +60,21 @@ class ToDataBaseBatchSender(list):
         self.clear()
 
 
-async def process_multiple_videos(batch_sender, filenames):
+def process_multiple_videos(filenames, logger_is_debug):
+    logging.basicConfig(format="[%(thread)-5d]%(asctime)s: %(message)s")
+    logger = logging.getLogger("log")
+    if logger_is_debug:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+    engine = create_engine(SQLITE_DRIVER_NAME + DATABASE_FILE_NAME)
+    engine.connect()
+    batchSender = ToDataBaseBatchSender(engine)
     cap_dict = {}
-    print(filenames)
     for filename in filenames:
         cap = cv2.VideoCapture(
             RELATIVE_INPUT_VIDEOS_FOULDER_PATH + '/' + filename)
         cap_dict[filename] = cap
-    tasks = list()
     for filename in cap_dict.keys():
         logger.info("Start processing video file {}".format(filename))
         cap = cap_dict[filename]
@@ -81,10 +83,9 @@ async def process_multiple_videos(batch_sender, filenames):
             ret, frame = cap.read()
             if not ret:
                 break
-            tasks.append(asyncio.ensure_future(process_frame(
-                batch_sender, frame, frame_ind, filename, cap.get(cv2.CAP_PROP_POS_MSEC))))
+            process_frame(
+                batchSender, frame, frame_ind, filename, cap.get(cv2.CAP_PROP_POS_MSEC))
             frame_ind += 1
-            await asyncio.sleep(0)
         logger.info("Finish processing video file {}".format(filename))
         logger.info("Moving video file {} to out foulder".format(filename))
         shutil.move(RELATIVE_INPUT_VIDEOS_FOULDER_PATH + '/' +
@@ -92,20 +93,13 @@ async def process_multiple_videos(batch_sender, filenames):
         logger.info(
             "Finished moving video file {} to out foulder".format(filename))
         logger.debug("Sending batch of data to database")
-        batch_sender.batch_load_to_db()
+        batchSender.batch_load_to_db()
         logger.debug("Finished sending batch of data to database")
-    await asyncio.gather(*tasks)
-
-
-def process_videos_in_event_loop(filenames):
-    engine = create_engine(SQLITE_DRIVER_NAME + DATABASE_FILE_NAME)
-    engine.connect()
-    batch_sender = ToDataBaseBatchSender(engine)
-    asyncio.run(process_multiple_videos(batch_sender, filenames))
     engine.dispose()
 
 
-async def process_frame(batch_sender, frame, frame_ind, filename, timestamp):
+def process_frame(batch_sender, frame, frame_ind, filename, timestamp):
+    logger = logging.getLogger("log")
     logger.debug("Processing frame {}".format(
         str(frame_ind) + " of video file " + filename))
     frame = cv2.resize(frame, (TARGET_WIDTH, TARGET_HEIGHT),
@@ -133,15 +127,18 @@ def get_all_mp4_files_in_foulder(path):
 
 
 def main():
-
-    logger.info("Started")
     parser = argparse.ArgumentParser()
     parser.add_argument("--processes_number", default=cpu_count(), type=int)
     parser.add_argument("--debug", default=False, action="store_true")
     args = parser.parse_args()
     processes_number = args.processes_number
+    logging.basicConfig(format="[%(thread)-5d]%(asctime)s: %(message)s")
+    logger = logging.getLogger("log")
     if args.debug == True:
-        logging.getLogger().setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+    logger.info("Started")
     filenames = get_all_mp4_files_in_foulder(
         RELATIVE_INPUT_VIDEOS_FOULDER_PATH)
     try:
@@ -155,8 +152,13 @@ def main():
     engine.connect()
     Base.metadata.create_all(engine)
     engine.dispose()
+    filenames_splitted_plus_logger_level = []
+    for file_names_group in filenames_splitted:
+        filenames_splitted_plus_logger_level.append(
+            (file_names_group, args.debug))
     with ProcessPool(processes_number) as pool:
-        pool.map(process_videos_in_event_loop, filenames_splitted)
+        pool.starmap(process_multiple_videos,
+                     filenames_splitted_plus_logger_level)
     logger.info("Completed")
 
 
