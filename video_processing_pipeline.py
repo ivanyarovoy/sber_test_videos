@@ -98,7 +98,7 @@ def process_multiple_videos(filenames, logger_is_debug):
     engine.dispose()
 
 
-def process_frame(batch_sender, frame, frame_ind, filename, timestamp):
+def process_frame(batchSender, frame, frame_ind, filename, timestamp):
     logger = logging.getLogger("log")
     logger.debug("Processing frame {}".format(
         str(frame_ind) + " of video file " + filename))
@@ -114,7 +114,7 @@ def process_frame(batch_sender, frame, frame_ind, filename, timestamp):
                           frame_timestamp=timestamp,
                           frame_string=frame
                           )
-    batch_sender.append(frameToDB)
+    batchSender.append(frameToDB)
     logger.debug("Finished processing frame {}".format(
         str(frame_ind) + " of video file " + filename))
 
